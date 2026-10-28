@@ -22,13 +22,15 @@ python3 -m http.server 8080
 
 | 方式 | 说明 |
 | --- | --- |
-| **导入谱面（zip / 文件）** | 选择 `.zip` 谱面包（内含 `chart.json`/`chart.rpe` + 音频 + 曲绘），或直接多选谱面文件 + 音频 + 图片 |
+| **导入谱面（pez / zip / 文件）** | 选择 `.pez`（Phira 官方打包格式）或 `.zip` 谱面包（内含 `chart.json` + `info.yml`/`info.txt` + 音频 + 曲绘），或直接多选谱面文件 + 音频 + 图片 |
 | **导入文件夹** | 选择整个谱面文件夹（`webkitdirectory`），自动配对谱面 / 音频 / 曲绘 |
 | **配置转谱** | 粘贴紧凑行文本或 JSON 配置，现场生成可游玩的谱面（无需任何素材） |
 
 支持的谱面格式：
 
 - **RPE / Phira JSON**（`.json`、`.rpe`）：完整支持多判定线、父子判定线、`eventLayers` 事件层、29 种缓动、`speedEvents` 速度事件、噪域 `blockAreaList`、自动倒打 `autoFlipIntervals`。
+- **Phira 谱面包 `.pez`**（本质是 zip）：自动解包，按内容识别真正的谱面文件（避开 `chart_stats.json`），并从 `info.yml` / `info.txt` 读取曲名、曲师、谱师、难度、曲绘名。
+- **Phigros 官方格式 v1 / v3**（`.pez` / `.zip` 内的 `chart.json`）：1/32 拍时间轴、`judgeLineList`、`PositionX` 缩放、速度事件积分出线高度、噪域、自动倒打。
 - **PEC 文本**（`.pec`）：`&` 偏移行、`#` 事件行、`n1..n4` 音符行。
 - **纯配置**：JSON `{name,bpm,offset,duration,lines:[{x,y,rotate,notes:[{t,type,x,hold}]}]}` 或紧凑行
 

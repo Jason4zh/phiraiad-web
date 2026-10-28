@@ -66,8 +66,9 @@
     return kfs;
   }
 
-  /* 速度事件 → 高度函数（对速度积分） */
-  function buildHeight(layers, beatToTime, duration) {
+  /* 速度事件 → 高度函数（对速度积分）；scale 为上游的 SPEED_RATIO 口径换算 */
+  function buildHeight(layers, beatToTime, duration, scale) {
+    scale = scale || 1;
     const evs = [];
     (layers || []).forEach(layer => {
       const arr = layer && (layer.speedEvents || layer.speed_events);
@@ -106,7 +107,7 @@
       } else if (s && t < s.t0) {
         v = lastV;
       }
-      h += v * dt;
+      h += v * dt * scale;
       arr[i] = h;
     }
     return {
@@ -114,7 +115,7 @@
         if (t <= 0) return 0;
         const x = t / dt;
         const i = Math.floor(x);
-        if (i + 1 >= n) return arr[n - 1] + (t - (n - 1) * dt) * (segs.length ? segs[segs.length - 1].v1 : 0);
+        if (i + 1 >= n) return arr[n - 1] + (t - (n - 1) * dt) * (segs.length ? segs[segs.length - 1].v1 : 0) * scale;
         return arr[i] + (arr[i + 1] - arr[i]) * (x - i);
       },
       simple: false
@@ -155,9 +156,10 @@
         father: (rl.father !== undefined ? rl.father : (L.father !== undefined ? L.father : null)),
         rotateWithFather: !!(rl.rotateWithFather !== undefined ? rl.rotateWithFather : L.rotateWithFather),
         zOrder: Number(rl.zOrder !== undefined ? rl.zOrder : (L.zOrder !== undefined ? L.zOrder : 0)) || 0,
-        alpha: eventKfs(pick('alphaEvents'), b2t, 1, 1),
+        alpha: eventKfs(pick('alphaEvents'), b2t, 1 / 255, 1),
         moveX: eventKfs(pick('moveXEvents'), b2t, 2 / RPE_W, 0),
-        moveY: eventKfs(pick('moveYEvents'), b2t, 2 / RPE_H, 0),
+        /* 上游 RPE 的 y 轴向下为正，引擎世界坐标向上为正 → 取反 */
+        moveY: eventKfs(pick('moveYEvents'), b2t, -2 / RPE_H, 0),
         rotate: eventKfs(pick('rotateEvents'), b2t, -1, 0),
         scaleX: eventKfs(ext.scaleXEvents, b2t, 1, 1),
         scaleY: eventKfs(ext.scaleYEvents, b2t, 1, 1),
@@ -166,7 +168,7 @@
         notes: [],
         speed: null
       };
-      line.height = buildHeight(layers, b2t, 0); // 后面重算（需 duration）
+      line.height = buildHeight(layers, b2t, 0, RPE_SPEED_RATIO); // 后面重算（需 duration）
       line._layers = layers;
       line._b2t = b2t;
 
@@ -183,7 +185,7 @@
           time,
           endTime,
           x: (Number(rn.positionX !== undefined ? rn.positionX : rn.position_x) || 0) / (RPE_W / 2),
-          yOffset: (Number(rn.yOffset !== undefined ? rn.yOffset : rn.y_offset) || 0) * 2 / RPE_H * speed,
+          yOffset: -(Number(rn.yOffset !== undefined ? rn.yOffset : rn.y_offset) || 0) * 2 / RPE_H * speed,
           size: Number(rn.size) || 1,
           speed,
           above: rn.above === undefined ? true : !!Number(rn.above),
@@ -205,7 +207,7 @@
     });
 
     const duration = Math.max(maxTime + 2, 3);
-    lines.forEach(l => { l.height = buildHeight(l._layers, l._b2t, duration); });
+    lines.forEach(l => { l.height = buildHeight(l._layers, l._b2t, duration, RPE_SPEED_RATIO); });
 
     /* note.height / endHeight 与可见时间 */
     lines.forEach(l => {
@@ -254,6 +256,196 @@
       raw: obj,
       timing
     });
+  }
+
+  /* ------------ Phigros 官方格式 1 / 3（.pez 内 chart.json 的常见格式） ------------
+     对齐上游 prpr/src/parse/pgr.rs：
+       · 时间单位为 1/32 拍，r = 60/32/bpm 秒
+       · 线位移 v3 为 (start, start2)∈[0,1]，x = -1+2*start，y(internal, 向下为正) = -1+2*start2
+       · v1 的 start 打包为 x*1000+y（x∈[-880,880]，y∈[-520,520]）
+       · 速度事件只有恒定 value，按时间积分得到“高度”，并 /HEIGHT_RATIO
+       · 音符 type：1 tap / 2 drag / 3 hold / 4 flick；positionX 上下限 ±8.889 → 世界 ±1
+     引擎的世界坐标 y 向上为正，故内部“向下为正”的量在此取反。 */
+  const PGR_NOTE_TYPES = { 1: 'tap', 2: 'drag', 3: 'hold', 4: 'flick' };
+  const PGR_X_FACTOR = 2 * 9 / 160;      /* 8.889 * 0.1125 = 1 */
+  const HEIGHT_RATIO = 900 / 1600;
+  /* 上游 prpr RPE: SPEED_RATIO = 10 / 45 / HEIGHT_RATIO */
+  const RPE_SPEED_RATIO = 10 / 45 / HEIGHT_RATIO;
+
+  function pgrHeight(evs, r, duration) {
+    const segs = (evs || []).map(e => {
+      const st = e.startTime !== undefined ? e.startTime : e.start_time;
+      const et = e.endTime !== undefined ? e.endTime : e.end_time;
+      return {
+        t0: Math.max(0, (Number(st) || 0) * r),
+        t1: Math.max(0, (Number(et) || 0) * r),
+        v: Number(e.value) || 0
+      };
+    }).filter(s => isFinite(s.t1) && s.t1 >= s.t0).sort((a, b) => a.t0 - b.t0);
+    if (!segs.length) return { at: t => t, simple: true };
+    const dt = 1 / 240;
+    const tEnd = Math.max(duration, segs[segs.length - 1].t1) + 0.5;
+    const n = Math.ceil(tEnd / dt) + 2;
+    const arr = new Float64Array(n);
+    let si = 0, h = 0, lastV = 0;
+    for (let i = 1; i < n; i++) {
+      const t = (i - 1) * dt;
+      while (si < segs.length && segs[si].t1 <= t) { lastV = segs[si].v; si++; }
+      let v = lastV;
+      const s = segs[si];
+      if (s && t >= s.t0 && t <= s.t1) v = s.v;
+      h += v * dt;
+      arr[i] = h;
+    }
+    return {
+      at: t => {
+        if (t <= 0) return 0;
+        const x = t / dt, i = Math.floor(x);
+        if (i + 1 >= n) return arr[n - 1] + (t - (n - 1) * dt) * (si < segs.length ? segs[si].v : (segs.length ? segs[segs.length - 1].v : 0));
+        return arr[i] + (arr[i + 1] - arr[i]) * (x - i);
+      },
+      simple: false
+    };
+  }
+
+  function parsePGR(obj, extra) {
+    extra = extra || {};
+    const version = Number(obj.formatVersion !== undefined ? obj.formatVersion : obj.format_version) || 3;
+    const offset = Number(obj.offset) || 0;   /* Phigros 的 offset 单位是秒 */
+    const rawLines = obj.judgeLineList || obj.judge_lines || [];
+    const lines = [];
+    let maxTime = 0;
+
+    rawLines.forEach((rl, idx) => {
+      const bpm = Number(rl.bpm) || 120;
+      const r = 60 / 32 / bpm;
+      const t2s = v => (Number(v) || 0) * r;
+      const num = v => Number(v) || 0;
+
+      /* 事件 → 关键帧；恒定缓动（上游 Keyframe::new(..., 2) 即线性） */
+      const kfs = (evs, fn, def) => {
+        const out = [];
+        (evs || []).forEach(e => {
+          const t0 = Math.max(0, t2s(e.startTime !== undefined ? e.startTime : e.start_time));
+          const t1 = Math.max(0, t2s(e.endTime !== undefined ? e.endTime : e.end_time));
+          const v0 = fn(e, 0), v1 = fn(e, 1);
+          out.push({ t: t0, v: v0, tw: 1 });
+          out.push({ t: Math.max(t1, t0), v: v1, tw: 1 });
+        });
+        out.sort((a, b) => a.t - b.t);
+        if (!out.length) out.push({ t: 0, v: def, tw: 1 });
+        else if (out[0].t > 1e-6) out.unshift({ t: 0, v: out[0].v, tw: 1 });
+        return out;
+      };
+
+      const moveEvents = rl.judgeLineMoveEvents || rl.judge_line_move_events || rl.moveEvents;
+      const moveXOf = version === 1
+        ? (e, w) => { const raw = num(w ? e.end : e.start); return (-880 + (raw - raw % 1000) / 1000 * 2) / 880; }
+        : (e, w) => -1 + num(w ? e.end : e.start) * 2;
+      const moveYOf = version === 1
+        ? (e, w) => (520 - num(w ? e.end : e.start) % 1000 * 2) / 520
+        : (e, w) => 1 - num(w ? e.end2 : e.start2) * 2;
+
+      const line = {
+        index: idx,
+        name: rl.name || ('line' + idx),
+        texture: rl.Texture || rl.texture || '',
+        father: null,
+        rotateWithFather: false,
+        zOrder: 0,
+        alpha: kfs(rl.judgeLineDisappearEvents || rl.judge_line_disappear_events || rl.alphaEvents, (e, w) => num(w ? e.end : e.start), 1),
+        moveX: kfs(moveEvents, moveXOf, 0),
+        moveY: kfs(moveEvents, moveYOf, 0),
+        rotate: kfs(rl.judgeLineRotateEvents || rl.judge_line_rotate_events || rl.rotateEvents, (e, w) => -num(w ? e.end : e.start), 0),
+        scaleX: [], scaleY: [], incline: [], color: [],
+        notes: [],
+        height: null,
+        speedEvents: rl.speedEvents || rl.speed_events || [],
+        bpmRate: r
+      };
+
+      const addNotes = (arr, above) => {
+        (arr || []).forEach(rn => {
+          const type = PGR_NOTE_TYPES[rn.type] || 'tap';
+          const time = t2s(rn.time);
+          const hold = Number(rn.holdTime !== undefined ? rn.holdTime : rn.hold_time) || 0;
+          const endTime = type === 'hold' ? Math.max(t2s(num(rn.time) + hold), time + 0.03) : time;
+          line.notes.push({
+            type, time, endTime,
+            x: num(rn.positionX !== undefined ? rn.positionX : rn.position_x) * PGR_X_FACTOR,
+            yOffset: 0,
+            size: 1,
+            speed: num(rn.speed) || 1,
+            above: !!above, fake: false, alpha: 1,
+            visibleTime: 0, visStart: -1e9,
+            hitsound: null, tint: null, fxTint: null, judgeArea: 1,
+            line, status: 'wait', count: false, height: 0, endHeight: 0
+          });
+          maxTime = Math.max(maxTime, endTime);
+        });
+      };
+      addNotes(rl.notesAbove || rl.notes_above, true);
+      addNotes(rl.notesBelow || rl.notes_below, false);
+
+      lines.push(line);
+    });
+
+    const duration = Math.max(maxTime + 2, 3);
+    lines.forEach(l => {
+      const h = pgrHeight(l.speedEvents, l.bpmRate, duration);
+      l.height = h.simple ? h : { at: t => h.at(t) / HEIGHT_RATIO, simple: false };
+      l.notes.forEach(n => {
+        n.height = l.height.at(n.time);
+        n.endHeight = n.type === 'hold' ? l.height.at(n.endTime) : n.height;
+      });
+      l.notes.sort((a, b) => a.time - b.time || a.x - b.x);
+    });
+
+    const noise = (obj.blockAreaList || obj.block_area_list || []).map(b => ({
+      topRight: pt(b.topRightPercentage),
+      bottomLeft: pt(b.bottomLeftPercentage),
+      appearTime: +b.appearTime || 0,
+      enableTime: +b.enableTime || 0,
+      disableTime: +b.disableTime || 0,
+      disappearTime: +b.disappearTime || 0,
+      isSubtract: !!b.isSubtract,
+      rotateEvents: [], moveEvents: [], scaleEvents: []
+    }));
+
+    const info = {
+      name: extra.name || obj.name || '未命名谱面',
+      artist: extra.artist || obj.artist || obj.composer || '',
+      charter: extra.charter || obj.charter || '',
+      difficulty: extra.difficulty !== undefined ? Number(extra.difficulty) : (obj.difficulty !== undefined ? Number(obj.difficulty) : 0),
+      level: extra.level || obj.level || '',
+      illustration: extra.illustration || ''
+    };
+
+    return finalize({
+      format: 'pgr' + version,
+      info,
+      offset,
+      duration,
+      lines,
+      noise,
+      flipIntervals: [],
+      raw: obj,
+      timing: null
+    });
+  }
+
+  /* 自动判别 JSON 谱面格式：RPE（META/BPMList/eventLayers）还是 Phigros（formatVersion/notesAbove） */
+  function parseChartJSON(obj, extra) {
+    obj = obj || {};
+    const rpeLike = !!(obj.META || obj.BPMList || obj.bpmList || obj.eventLayers);
+    const first = rpeLike ? parseRPE(obj, extra) : parsePGR(obj, extra);
+    if ((first.stats && first.stats.playable) > 0) return first;
+    /* 判定反了就换另一种再解析一次，取音符更多的一方 */
+    try {
+      const alt = rpeLike ? parsePGR(obj, extra) : parseRPE(obj, extra);
+      if ((alt.stats && alt.stats.playable) > (first.stats && first.stats.playable)) return alt;
+    } catch (e) { }
+    return first;
   }
 
   function pt(p) {
@@ -372,27 +564,36 @@
     const byName = name => list.find(f => (f.name || '') === name);
 
     for (const f of list) {
-      if (!chartFile && /\.json$/i.test(f.name)) {
-        if (CHART_HINT.test(f.name) || list.filter(x => /\.json$/i.test(x.name)).length === 1) chartFile = f;
-      }
       if (!audioFile && AUDIO_EXT.test(f.name)) audioFile = f;
       if (!imageFile && IMG_EXT.test(f.name)) imageFile = f;
       if (/^info\.(json|yml|yaml|txt)$/i.test(f.name)) infoFile = f;
     }
-    if (!chartFile) {
-      /* 兜底：任意 json 里带 judgeLineList 的 */
-      for (const f of list) {
-        if (!/\.json$/i.test(f.name)) continue;
-        try {
-          const o = JSON.parse(await f.text());
-          if (o.judgeLineList || o.judge_lines) { chartFile = f; break; }
-        } catch (e) { }
-      }
+
+    /* 选谱面文件：优先 chart.json，其次名字带 chart/diff/level 的，最后任意带判定线的 json。
+       .pez 里常同时有 chart.json 与 chart_stats.json，必须按内容判定。 */
+    const looksLikeChart = o => !!(o && typeof o === 'object' &&
+      (o.judgeLineList || o.judge_lines || o.BPMList || o.bpmList ||
+        o.formatVersion !== undefined || o.format_version !== undefined));
+    const jsonFiles = list.filter(f => /\.json$/i.test(f.name)).sort((a, b) => {
+      const score = f => (/^chart\.json$/i.test(f.name) ? 0 : (CHART_HINT.test(f.name) ? 1 : 2));
+      return score(a) - score(b);
+    });
+    let chartObj = null;
+    for (const f of jsonFiles) {
+      try {
+        const o = JSON.parse(await f.text());
+        if (looksLikeChart(o)) { chartFile = f; chartObj = o; break; }
+      } catch (e) { }
     }
-    if (!chartFile && !list.some(f => /\.pec$/i.test(f.name))) {
+
+    if (!chartFile) {
       for (const f of list) if (/\.pec$/i.test(f.name)) { chartFile = f; break; }
     }
-    if (!chartFile) throw new Error('未找到谱面文件（chart.json / *.json / *.pec）');
+    if (!chartFile) {
+      const yml = list.find(f => /^(chart|谱面)[^.]*\.(ya?ml)$/i.test(f.name));
+      if (yml) throw new Error('该谱面为旧版 YAML 格式（' + yml.name + '），请先用 Phira 打开并另存为 chart.json');
+      throw new Error('未找到谱面文件（chart.json / *.json / *.pec）；.pez 可直接拖入');
+    }
 
     const extra = { name: '', artist: '', charter: '', difficulty: 0, level: '', illustration: '' };
     if (infoFile) {
@@ -425,9 +626,11 @@
     if (/\.pec$/i.test(chartFile.name)) {
       chart = parsePEC(text, extra);
     } else {
-      let obj;
-      try { obj = JSON.parse(text); } catch (e) { throw new Error('谱面 JSON 解析失败：' + e.message); }
-      chart = parseRPE(obj, extra);
+      let obj = chartObj;
+      if (!obj) {
+        try { obj = JSON.parse(text); } catch (e) { throw new Error('谱面 JSON 解析失败：' + e.message); }
+      }
+      chart = parseChartJSON(obj, extra);
       chart.info.name = extra.name || chart.info.name;
       chart.info.artist = extra.artist || chart.info.artist;
       chart.info.charter = extra.charter || chart.info.charter;
@@ -495,7 +698,7 @@
     /* 保留相对路径用于识别子目录 */
     entries.forEach((e, i) => { try { Object.defineProperty(files[i], 'webkitRelativePath', { value: e.name }); } catch (err) { } });
     const b = await bundleFromFiles(files);
-    if ((!b.chart.info.name || b.chart.info.name === '未命名谱面') && zipName) b.chart.info.name = zipName.replace(/\.zip$/i, '');
+    if ((!b.chart.info.name || b.chart.info.name === '未命名谱面') && zipName) b.chart.info.name = zipName.replace(/\.(zip|pez)$/i, '');
     return b;
   }
 
@@ -579,7 +782,7 @@
       const text = await Lib.getBlob(id, 'chart');
       if (!text) throw new Error('谱面数据丢失');
       const chart = /^\s*[#&n]/.test(text.slice(0, 80)) && !/^\s*[{[]/.test(text.slice(0, 80))
-        ? parsePEC(text, {}) : parseRPE(JSON.parse(text), {});
+        ? parsePEC(text, {}) : parseChartJSON(JSON.parse(text), {});
       const audio = await Lib.getBlob(id, 'audio');
       const image = await Lib.getBlob(id, 'image');
       return { chart, audio: audio || null, illustration: image || null };
@@ -714,9 +917,9 @@
     const judgeLineList = chart.lines.map((l, i) => ({
       Name: l.name, Texture: 'line.png',
       eventLayers: [{
-        alphaEvents: [{ start: U.evalKfs(l.alpha, 0), end: U.evalKfs(l.alpha, 0), startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
-        moveXEvents: [{ start: U.evalKfs(l.moveX, 0) * RPE_W, end: U.evalKfs(l.moveX, 0) * RPE_W, startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
-        moveYEvents: [{ start: U.evalKfs(l.moveY, 0) * RPE_H, end: U.evalKfs(l.moveY, 0) * RPE_H, startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
+        alphaEvents: [{ start: U.evalKfs(l.alpha, 0) * 255, end: U.evalKfs(l.alpha, 0) * 255, startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
+        moveXEvents: [{ start: U.evalKfs(l.moveX, 0) * (RPE_W / 2), end: U.evalKfs(l.moveX, 0) * (RPE_W / 2), startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
+        moveYEvents: [{ start: -U.evalKfs(l.moveY, 0) * (RPE_H / 2), end: -U.evalKfs(l.moveY, 0) * (RPE_H / 2), startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
         rotateEvents: [{ start: -U.evalKfs(l.rotate, 0), end: -U.evalKfs(l.rotate, 0), startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }],
         speedEvents: [{ start: 1, end: 1, startTime: [0, 1, 1], endTime: [0, 1, 1], easingType: 1 }]
       }],
@@ -733,7 +936,7 @@
   }
 
   global.ChartLib = {
-    parseRPE, parsePEC, makeTiming, eventKfs, buildHeight,
+    parseRPE, parsePGR, parsePEC, parseChartJSON, makeTiming, eventKfs, buildHeight,
     bundleFromFiles, bundleFromZip, readZip,
     Lib, buildFromConfig, parseCompact, toRPE, finalize,
     RPE_W, RPE_H

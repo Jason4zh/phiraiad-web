@@ -35,8 +35,8 @@
     const list = Array.from(files || []);
     if (!list.length) return [];
     const out = [];
-    const zips = list.filter(f => /\.zip$/i.test(f.name));
-    const others = list.filter(f => !/\.zip$/i.test(f.name));
+    const zips = list.filter(f => /\.(zip|pez)$/i.test(f.name));
+    const others = list.filter(f => !/\.(zip|pez)$/i.test(f.name));
     for (const z of zips) {
       try {
         const buf = await z.arrayBuffer();
@@ -68,7 +68,7 @@
       try { cfg = JSON.parse(t); } catch (e) { throw new Error('JSON 解析失败'); }
       if (cfg && cfg.BPMList && cfg.judgeLineList) {
         /* 其实是 RPE 谱面 */
-        const chart = C.parseRPE(cfg.BPMList ? cfg : cfg, { name: name });
+        const chart = C.parseChartJSON(cfg, { name: name });
         return C.Lib.save({ chart, chartText: JSON.stringify(cfg), audio: null, illustration: null, files: [{ name: name || 'chart.json', size: t.length }] });
       }
     }
