@@ -9,6 +9,9 @@
 
   const UI = {};
   global.UI = UI;
+  const APP_VERSION = '1.4.0';
+  global.APP_VERSION = APP_VERSION;
+  if (global.console) console.log('PhiraiAd Web v' + APP_VERSION);
 
   const st = {
     screen: 'home',

@@ -554,59 +554,78 @@
   }
 
   /* ------------------------- 谱面包载入 ------------------------- */
-  const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|flac)$/i;
-  const IMG_EXT = /\.(png|jpg|jpeg|webp|gif|bmp)$/i;
-  const CHART_HINT = /(chart|谱面|diff|level)/i;
+  /* 不依赖后缀：仅用扩展名/MIME 粗分“演奏素材”，谱面与元数据一律靠内容嗅探 */
+  const AUDIO_EXT = /\.(mp3|ogg|oga|wav|m4a|aac|flac|opus|wma|aiff?|ape)$/i;
+  const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|avif|svg|tiff?)$/i;
+  const CHART_HINT = /(chart|谱面|谱|diff|level|map)/i;
+  const baseName = p => String(p || '').split(/[\\/]/).pop();
+  const stem = p => baseName(p).replace(/\.[^.]+$/, '');
 
   async function bundleFromFiles(files) {
-    const list = Array.from(files);
+    const list = Array.from(files).filter(f => f && (f.size === undefined || f.size > 0));
     let chartFile = null, audioFile = null, imageFile = null, infoFile = null;
-    const byName = name => list.find(f => (f.name || '') === name);
 
+    const isAudio = f => AUDIO_EXT.test(f.name) || /^audio\//.test(f.type || '');
+    const isImage = f => IMG_EXT.test(f.name) || /^image\//.test(f.type || '');
+    const isMeta = f => /^info(\.[^.]*)?$/i.test(stem(f.name));
+
+    const rest = [];
     for (const f of list) {
-      if (!audioFile && AUDIO_EXT.test(f.name)) audioFile = f;
-      if (!imageFile && IMG_EXT.test(f.name)) imageFile = f;
-      if (/^info\.(json|yml|yaml|txt)$/i.test(f.name)) infoFile = f;
+      if (isMeta(f)) { if (!infoFile) infoFile = f; continue; }
+      if (isAudio(f)) { if (!audioFile) audioFile = f; continue; }
+      if (isImage(f)) { if (!imageFile) imageFile = f; continue; }
+      rest.push(f);
     }
 
-    /* 选谱面文件：优先 chart.json，其次名字带 chart/diff/level 的，最后任意带判定线的 json。
-       .pez 里常同时有 chart.json 与 chart_stats.json，必须按内容判定。 */
+    /* 谱面识别：完全按内容。
+       JSON 看是否含判定线 / BPM 结构；文本看是否像 PEC（&/# 事件行 + n1..n4 音符行）。
+       .pez 内常同时有 chart.json 与 chart_stats.json，只能这样区分。 */
     const looksLikeChart = o => !!(o && typeof o === 'object' &&
       (o.judgeLineList || o.judge_lines || o.BPMList || o.bpmList ||
         o.formatVersion !== undefined || o.format_version !== undefined));
-    const jsonFiles = list.filter(f => /\.json$/i.test(f.name)).sort((a, b) => {
-      const score = f => (/^chart\.json$/i.test(f.name) ? 0 : (CHART_HINT.test(f.name) ? 1 : 2));
+    const looksLikePEC = t => /(^|\n)\s*[&#]/.test(t) && /(^|\n)\s*n[1-4]\b/i.test(t);
+
+    const candidates = rest.slice().sort((a, b) => {
+      const score = f => (/^chart$/i.test(stem(f.name)) ? 0 : (CHART_HINT.test(stem(f.name)) ? 1 : 2));
       return score(a) - score(b);
     });
-    let chartObj = null;
-    for (const f of jsonFiles) {
-      try {
-        const o = JSON.parse(await f.text());
-        if (looksLikeChart(o)) { chartFile = f; chartObj = o; break; }
-      } catch (e) { }
+
+    let chartObj = null, chartText = null;
+    for (const f of candidates) {
+      let t;
+      try { t = await f.text(); } catch (e) { continue; }
+      t = (t || '').replace(/^\uFEFF/, '').trim();
+      if (!t) continue;
+      if (t[0] === '{' || t[0] === '[') {
+        let o = null;
+        try { o = JSON.parse(t); } catch (e) { o = null; }
+        if (looksLikeChart(o)) { chartFile = f; chartObj = o; chartText = t; break; }
+      } else if (looksLikePEC(t)) {
+        chartFile = f; chartText = t; break;
+      }
+      /* 其它文本（stats / 说明 / 日志）继续往后找 */
     }
 
     if (!chartFile) {
-      for (const f of list) if (/\.pec$/i.test(f.name)) { chartFile = f; break; }
-    }
-    if (!chartFile) {
-      const yml = list.find(f => /^(chart|谱面)[^.]*\.(ya?ml)$/i.test(f.name));
+      const yml = rest.find(f => /\.(ya?ml)$/i.test(f.name));
       if (yml) throw new Error('该谱面为旧版 YAML 格式（' + yml.name + '），请先用 Phira 打开并另存为 chart.json');
-      throw new Error('未找到谱面文件（chart.json / *.json / *.pec）；.pez 可直接拖入');
+      throw new Error('未找到谱面内容（任意后缀均可：JSON 或 PEC 文本；.pez / .zip 可直接拖入）');
     }
 
     const extra = { name: '', artist: '', charter: '', difficulty: 0, level: '', illustration: '' };
     if (infoFile) {
       try {
-        if (/\.json$/i.test(infoFile.name)) {
-          const info = JSON.parse(await infoFile.text());
+        const txt = await infoFile.text();
+        const head = txt.replace(/^\uFEFF/, '').trim();
+        let info = null;
+        if (head[0] === '{') { try { info = JSON.parse(head); } catch (e) { info = null; } }
+        if (info) {
           Object.assign(extra, {
-            name: info.name || info.song || '', artist: info.composer || info.artist || '',
+            name: info.name || info.song || info.title || '', artist: info.composer || info.artist || '',
             charter: info.charter || info.chart_by || '', difficulty: info.difficulty || 0,
-            level: info.level || info.difficulty_name || ''
+            level: info.level || info.difficulty_name || '', illustration: info.illustration || ''
           });
         } else {
-          const txt = await infoFile.text();
           const get = k => {
             const m = txt.match(new RegExp('^\\s*' + k + '\\s*[:=]\\s*(.+)$', 'im'));
             return m ? m[1].trim().replace(/^["']|["']$/g, '') : '';
@@ -622,18 +641,19 @@
     }
 
     let chart;
-    const text = await chartFile.text();
-    if (/\.pec$/i.test(chartFile.name)) {
-      chart = parsePEC(text, extra);
-    } else {
+    const text = chartText !== null ? chartText : await chartFile.text();
+    const head = text.replace(/^\uFEFF/, '').trim();
+    if (chartObj || head[0] === '{' || head[0] === '[') {
       let obj = chartObj;
       if (!obj) {
-        try { obj = JSON.parse(text); } catch (e) { throw new Error('谱面 JSON 解析失败：' + e.message); }
+        try { obj = JSON.parse(head); } catch (e) { throw new Error('谱面 JSON 解析失败：' + e.message); }
       }
       chart = parseChartJSON(obj, extra);
       chart.info.name = extra.name || chart.info.name;
       chart.info.artist = extra.artist || chart.info.artist;
       chart.info.charter = extra.charter || chart.info.charter;
+    } else {
+      chart = parsePEC(text, extra);
     }
     if (!chart.info.name || chart.info.name === '未命名谱面') {
       chart.info.name = chartFile.name.replace(/\.[^.]+$/, '');

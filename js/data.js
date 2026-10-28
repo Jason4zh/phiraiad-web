@@ -31,12 +31,21 @@
   };
 
   /* ---------------- 导入 ---------------- */
+  /* 不按后缀判断：靠魔数（PK\x03\x04 / PK\x05\x06 / PK\x07\x08）识别 zip / pez 谱面包 */
+  async function looksZip(f) {
+    try {
+      const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+      return head.length >= 4 && head[0] === 0x50 && head[1] === 0x4b &&
+        (head[2] === 0x03 || head[2] === 0x05 || head[2] === 0x07);
+    } catch (e) { return false; }
+  }
+
   Repo.importFiles = async function (files) {
-    const list = Array.from(files || []);
+    const list = Array.from(files || []).filter(f => f && (f.size === undefined || f.size > 0));
     if (!list.length) return [];
     const out = [];
-    const zips = list.filter(f => /\.(zip|pez)$/i.test(f.name));
-    const others = list.filter(f => !/\.(zip|pez)$/i.test(f.name));
+    const zips = [], others = [];
+    for (const f of list) { (await looksZip(f) ? zips : others).push(f); }
     for (const z of zips) {
       try {
         const buf = await z.arrayBuffer();
