@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b13">
+<meta name="description" content="PhiraiAd Web —— Phira 非官方改版的网页移植版，支持 RPE / Phira 谱面与完整模拟游玩">
+<title>PhiraiAd Web</title>
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= 首页 ================= -->
+  <section class="screen active" id="screen-home">
+    <div class="bg-art"></div>
+    <div class="home-wrap">
+      <div class="logo-wrap">
+        <h1 class="logo">PhiraiAd<span class="logo-web">WEB</span></h1>
+        <p class="sub">Phira 非官方改版 · 网页移植</p>
+      </div>
+      <div class="home-menu">
+        <button class="btn big primary" id="btn-start">开始游戏</button>
+        <button class="btn big" id="btn-lib">谱面库</button>
+        <button class="btn big" id="btn-settings">设置</button>
+        <button class="btn big" id="btn-about">关于</button>
+      </div>
+      <div class="home-foot">
+        <span id="home-count">谱面库为空，先导入谱面</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 谱面库 ================= -->
+  <section class="screen" id="screen-lib">
+    <header class="topbar">
+      <button class="icon-btn" id="lib-back" title="返回">‹</button>
+      <h2>谱面库</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="lib-refresh" title="刷新">⟳</button>
+    </header>
+    <div class="lib-tools">
+      <div class="search-box">
+        <img src="assets/search.png" alt="">
+        <input id="lib-search" class="input" placeholder="搜索曲名 / 谱师 / 难度">
+      </div>
+      <select id="lib-sort" class="input small">
+        <option value="added">按导入时间</option>
+        <option value="name">按曲名</option>
+        <option value="level">按难度</option>
+        <option value="score">按成绩</option>
+        <option value="star">收藏优先</option>
+      </select>
+      <button class="btn small" id="lib-star-filter">仅收藏</button>
+    </div>
+    <div class="lib-actions">
+      <button class="btn small primary" id="btn-import">导入谱面（zip/文件）</button>
+      <button class="btn small" id="btn-import-dir">导入文件夹</button>
+      <button class="btn small" id="btn-config">配置转谱</button>
+    </div>
+    <div class="lib-list" id="lib-list"></div>
+    <div class="drop-hint" id="drop-hint">松手导入谱面</div>
+  </section>
+
+  <!-- ================= 设置 ================= -->
+  <section class="screen" id="screen-settings">
+    <header class="topbar">
+      <button class="icon-btn" id="set-back" title="返回">‹</button>
+      <h2>设置</h2>
+      <div class="spacer"></div>
+      <button class="btn small" id="set-reset">恢复默认</button>
+    </header>
+    <nav class="tabs" id="settings-tabs"></nav>
+    <div class="settings-body" id="settings-body"></div>
+  </section>
+
+  <!-- ================= 游玩 ================= -->
+  <section class="screen play" id="screen-play">
+    <canvas id="play-canvas"></canvas>
+    <div class="hud" id="hud">
+      <div class="hud-left">
+        <div class="hud-score" id="hud-score">0</div>
+        <div class="hud-acc" id="hud-acc">100.00%</div>
+      </div>
+      <div class="hud-center">
+        <div class="hud-combo" id="hud-combo"></div>
+      </div>
+      <div class="hud-right">
+        <button class="icon-btn" id="btn-pause" title="暂停">❚❚</button>
+        <div class="hud-fps" id="hud-fps"></div>
+      </div>
+      <div class="hud-counts" id="hud-counts"></div>
+      <div class="hud-info" id="hud-info"></div>
+    </div>
+    <div class="overlay" id="pause-menu">
+      <div class="panel">
+        <h2>已暂停</h2>
+        <div class="panel-btns">
+          <button class="btn big primary" id="btn-resume">继续</button>
+          <button class="btn big" id="btn-restart">重新开始</button>
+          <button class="btn big" id="btn-quit">退出游玩</button>
+        </div>
+        <div class="pause-tip">按 Esc 继续 · 双击屏幕暂停</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 结算 ================= -->
+  <section class="screen" id="screen-result">
+    <div class="result-wrap">
+      <div class="result-head">
+        <div class="res-title" id="res-title">曲名</div>
+        <div class="res-sub" id="res-sub"></div>
+      </div>
+      <div class="res-main">
+        <img class="res-rank" id="res-rank" src="assets/rank/A.png" alt="rank">
+        <div class="res-scorebox">
+          <div class="res-score" id="res-score">0</div>
+          <div class="res-acc" id="res-acc">0.00%</div>
+          <div class="res-badges" id="res-badges"></div>
+        </div>
+      </div>
+      <div class="res-counts" id="res-counts"></div>
+      <div class="res-btns">
+        <button class="btn big primary" id="btn-retry">重试</button>
+        <button class="btn big" id="btn-back-lib">返回谱面库</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<input type="file" id="file-input" multiple accept=".zip,.json,.pec,.txt,.yaml,audio/*,image/*" hidden>
+<input type="file" id="dir-input" webkitdirectory directory multiple hidden>
+<div id="toast-wrap"></div>
+
+<script src="js/util.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/chart.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/data.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
